@@ -12,7 +12,7 @@ renderer uses the same authenticated Streammore UI, API, HLS player, subtitles,
 progress tracking, Live TV, My List, ratings, downloads, and update-compatible
 backend as the web client.
 
-Version 1.0.1 also explicitly bridges the browser HTML Fullscreen API to the
+Version 1.0.2 also explicitly bridges the browser HTML Fullscreen API to the
 native Windows window, so the player fullscreen button changes the real app
 window rather than only changing the page layout.
 
@@ -81,7 +81,18 @@ PowerShell example for encoding the certificate locally:
 ```
 
 The workflow refuses to publish a tagged release when either signing secret is
-missing. The existing `v1.0.1` release was created before signing was enabled;
-publish the next version after adding the secrets.
+missing. The existing `v1.0.1` release was created before signing and bundled VLC were
+enabled; publish `v1.0.2` after adding the certificate secrets.
 
 The Electron shell keeps cookies in the normal persistent Electron session, keeps Node integration disabled, denies renderer permission prompts, prevents the app from navigating away from the Streammore origin, and opens external links in the system browser.
+
+## Native MKV playback
+
+The Windows release bundles VLC 3.0.x/libVLC and the `electron-vlc-player`
+native bridge. Use **Streammore → Open MKV file…** or press `Ctrl+O` to open a
+local `.mkv`/`.mka` file. VLC handles Matroska video, audio tracks, subtitles,
+seeking, and fullscreen independently of Chromium's HTML5 limitations.
+
+The VLC runtime is downloaded by the Windows build workflow and is not checked
+into Git. The distributed VLC license and plugin files are included in the
+bundled runtime directory.

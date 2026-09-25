@@ -1,6 +1,6 @@
 {
   "name": "streammore-windows",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Standalone Streammore desktop app for Windows",
   "productName": "Streammore",
   "main": "main.cjs",
@@ -17,6 +17,7 @@
     "electron-builder": "26.15.3"
   },
   "dependencies": {
-    "electron-updater": "^6.8.9"
+    "electron-updater": "^6.8.9",
+    "electron-vlc-player": "^1.0.2"
   }
 }

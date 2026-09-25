@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, session, screen, dialog, Menu } = require('electron');
+const { app, BrowserWindow, shell, session, screen, dialog, Menu, ipcMain } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { autoUpdater } = require('electron-updater');
@@ -10,6 +10,7 @@ let mainWindow;
 let updatePromptOpen = false;
 let updateTimer;
 let autoCheckUpdates = true;
+let vlcPlayer = null;
 
 function configuredUrl() {
   const fromEnv = process.env.STREAMMORE_DESKTOP_URL;
@@ -105,6 +106,80 @@ function installUpdate() {
   autoUpdater.quitAndInstall(false, true);
 }
 
+function bundledVlcDir() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'vendor', 'vlc')
+    : path.join(__dirname, 'vendor', 'vlc');
+}
+
+async function removeVlcSurface() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  await mainWindow.webContents.executeJavaScript(`
+    document.getElementById('streammore-vlc-surface')?.remove();
+  `).catch(() => {});
+}
+
+async function closeMkvPlayer() {
+  if (vlcPlayer) {
+    try { vlcPlayer.destroy(); } catch (error) { console.warn('[vlc] destroy failed:', error.message); }
+    vlcPlayer = null;
+  }
+  await removeVlcSurface();
+}
+
+async function openMkvFile() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Open MKV file',
+    properties: ['openFile'],
+    filters: [{ name: 'Matroska video', extensions: ['mkv', 'mka'] }],
+  });
+  if (result.canceled || !result.filePaths[0]) return;
+
+  const vlcDir = bundledVlcDir();
+  if (!fs.existsSync(path.join(vlcDir, 'libvlc.dll'))) {
+    await dialog.showMessageBox(mainWindow, {
+      type: 'error',
+      title: 'MKV playback is not available',
+      message: 'The bundled VLC runtime is missing.',
+      detail: 'Reinstall the signed Streammore Windows package or rebuild it with the VLC runtime included.',
+    });
+    return;
+  }
+
+  try {
+    await mainWindow.webContents.executeJavaScript(`
+      document.getElementById('streammore-vlc-surface')?.remove();
+      const surface = document.createElement('div');
+      surface.id = 'streammore-vlc-surface';
+      surface.style.cssText = 'position:fixed;inset:0;z-index:1000;background:#000;';
+      document.body.appendChild(surface);
+    `);
+
+    if (!vlcPlayer) {
+      const { VlcPlayer } = require('electron-vlc-player');
+      vlcPlayer = new VlcPlayer({
+        window: mainWindow,
+        container: '#streammore-vlc-surface',
+        vlcDir,
+        controls: true,
+        pageFullscreenButton: true,
+        hardwareAcceleration: 'd3d11va',
+      });
+      await vlcPlayer.embed();
+    }
+    vlcPlayer.setSource(result.filePaths[0]);
+  } catch (error) {
+    await closeMkvPlayer();
+    await dialog.showMessageBox(mainWindow, {
+      type: 'error',
+      title: 'Could not open MKV file',
+      message: 'Streammore could not start the native VLC player.',
+      detail: error.message,
+    });
+  }
+}
+
 function updatePreferencesPath() {
   return path.join(app.getPath('userData'), 'update-preferences.json');
 }
@@ -198,6 +273,16 @@ function setupApplicationMenu() {
     {
       label: 'Streammore',
       submenu: [
+        {
+          label: 'Open MKV file…',
+          accelerator: 'CmdOrCtrl+O',
+          click: () => void openMkvFile(),
+        },
+        {
+          label: 'Close MKV player',
+          click: () => void closeMkvPlayer(),
+        },
+        { type: 'separator' },
         {
           label: 'Check for updates',
           click: () => void checkForUpdates(),
