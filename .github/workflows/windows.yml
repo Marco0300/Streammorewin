@@ -38,9 +38,25 @@ jobs:
           $vlcVersion = "3.0.21"
           $archive = "vlc-$vlcVersion-win64.zip"
           Invoke-WebRequest -Uri "https://get.videolan.org/vlc/$vlcVersion/win64/$archive" -OutFile $archive
-          New-Item -ItemType Directory -Force vlc-extracted | Out-Null
-          tar -xf $archive -C vlc-extracted
-          if ($LASTEXITCODE -ne 0) { throw "tar failed to extract VLC (exit $LASTEXITCODE)" }
+          $extractDir = Join-Path $PWD "vlc-extracted"
+          New-Item -ItemType Directory -Force $extractDir | Out-Null
+          $extracted = $false
+          try {
+            Expand-Archive -LiteralPath (Join-Path $PWD $archive) -DestinationPath $extractDir -Force -ErrorAction Stop
+            $extracted = $true
+          } catch { Write-Host "Expand-Archive failed: $($_.Exception.Message)" }
+          if (!$extracted) {
+            try {
+              $sevenZip = (Get-Command 7z.exe -ErrorAction Stop).Source
+              & $sevenZip x $archive "-o$extractDir" -y
+              if ($LASTEXITCODE -eq 0) { $extracted = $true }
+            } catch { Write-Host "7-Zip extraction failed: $($_.Exception.Message)" }
+          }
+          if (!$extracted) {
+            tar -xf $archive -C $extractDir
+            if ($LASTEXITCODE -eq 0) { $extracted = $true }
+          }
+          if (!$extracted) { throw "All VLC archive extraction methods failed" }
           $lib = Get-ChildItem -Path vlc-extracted -Filter libvlc.dll -Recurse | Select-Object -First 1
           if ($null -eq $lib) { throw "libvlc.dll was not found in the VLC archive" }
           New-Item -ItemType Directory -Force vendor/vlc | Out-Null
