@@ -1,7 +1,11 @@
 const { app, BrowserWindow, shell, session, screen, dialog, Menu, ipcMain } = require('electron');
 const fs = require('node:fs');
+const https = require('node:https');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
+const { pipeline } = require('node:stream/promises');
 const { autoUpdater } = require('electron-updater');
+const portableUpdate = require('./portable-update.cjs');
 
 const DEFAULT_URL = 'https://streammore.mmcloud.co.za';
 const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
@@ -11,6 +15,7 @@ let updatePromptOpen = false;
 let updateTimer;
 let autoCheckUpdates = true;
 let vlcPlayer = null;
+let portableStaged = null;
 
 function configuredUrl() {
   const fromEnv = process.env.STREAMMORE_DESKTOP_URL;
@@ -104,6 +109,194 @@ function checkForUpdates() {
 function installUpdate() {
   updatePromptOpen = false;
   autoUpdater.quitAndInstall(false, true);
+}
+
+// --- Portable build self-update -------------------------------------------
+//
+// electron-updater has no portable support: the portable launcher runs the app
+// from a temp directory and keeps the launched .exe open until the app exits,
+// so quitAndInstall() cannot replace it. The portable build instead downloads
+// the published portable executable, verifies it against portable.yml, and
+// hands the swap to a detached helper that runs once both processes exit.
+// The logic itself lives in portable-update.cjs.
+
+function httpsGet(url, redirects = 5) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(
+      url,
+      { headers: { 'User-Agent': `Streammore/${app.getVersion()}`, Accept: '*/*' } },
+      (response) => {
+        const status = response.statusCode || 0;
+        if ([301, 302, 303, 307, 308].includes(status) && response.headers.location) {
+          response.resume();
+          if (redirects <= 0) {
+            reject(new Error('too many redirects'));
+            return;
+          }
+          httpsGet(new URL(response.headers.location, url).toString(), redirects - 1).then(resolve, reject);
+          return;
+        }
+        if (status !== 200) {
+          response.resume();
+          reject(new Error(`download failed with HTTP ${status}`));
+          return;
+        }
+        resolve(response);
+      },
+    );
+    request.setTimeout(60_000, () => request.destroy(new Error('request timed out')));
+    request.on('error', reject);
+  });
+}
+
+async function fetchText(url) {
+  const response = await httpsGet(url);
+  const chunks = [];
+  for await (const chunk of response) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function downloadFile(url, destination) {
+  const response = await httpsGet(url);
+  const announced = Number(response.headers['content-length'] || 0);
+  await pipeline(response, fs.createWriteStream(destination));
+  const written = fs.statSync(destination).size;
+  if (announced > 0 && written !== announced) {
+    throw new Error(`the download stopped early (${written} of ${announced} bytes)`);
+  }
+  return written;
+}
+
+async function downloadPortableUpdate(version) {
+  const target = portableUpdate.portableExecutable();
+  if (!target) throw new Error('this build is not running as a portable executable');
+
+  const channel = portableUpdate.parsePortableChannel(
+    await fetchText(portableUpdate.portableChannelUrl(version)),
+  );
+  if (channel === null) {
+    throw new Error('the release does not publish a portable.yml channel file');
+  }
+
+  const expectedName = portableUpdate.portableAssetName(version);
+  if (channel.url !== expectedName) {
+    throw new Error(`the release publishes "${channel.url}" instead of "${expectedName}"`);
+  }
+
+  const staged = portableUpdate.stagedPathFor(target, version);
+  await fs.promises.mkdir(path.dirname(staged), { recursive: true });
+  await downloadFile(portableUpdate.portableAssetUrl(version), staged);
+
+  const verification = portableUpdate.verifyStagedFile(staged, channel);
+  if (!verification.ok) {
+    fs.rmSync(staged, { force: true });
+    throw new Error(`the downloaded update failed verification: ${verification.reason}`);
+  }
+
+  portableStaged = staged;
+  return staged;
+}
+
+function portableProblemDetail(error, version) {
+  const lines = [error.message];
+  if (error.code === 'EACCES' || error.code === 'EPERM') {
+    lines.push('Streammore cannot write next to the portable executable. Move it to a folder you can write to, such as your Desktop.');
+  }
+  if (version) {
+    lines.push(`You can also download the new version manually:\n${portableUpdate.releasePageUrl(version)}`);
+  }
+  return lines.join('\n\n');
+}
+
+function installPortableUpdate(version) {
+  const target = portableUpdate.portableExecutable();
+  const staged = portableStaged;
+  updatePromptOpen = false;
+
+  if (!target || !staged || !fs.existsSync(staged)) {
+    void dialog.showMessageBox(mainWindow, {
+      type: 'error',
+      title: 'Streammore update failed',
+      message: 'The downloaded update is no longer available.',
+      detail: portableProblemDetail(new Error('no staged update file'), version),
+    });
+    return;
+  }
+
+  const scriptPath = path.join(app.getPath('temp'), `streammore-portable-update-${process.pid}.ps1`);
+  try {
+    fs.writeFileSync(
+      scriptPath,
+      portableUpdate.buildSwapScript({
+        target,
+        staged,
+        appPid: process.pid,
+        launcherPid: process.ppid,
+        logPath: portableUpdate.failureLogPathFor(target),
+      }),
+      'utf8',
+    );
+    const helper = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', scriptPath],
+      { detached: true, stdio: 'ignore', windowsHide: true },
+    );
+    helper.unref();
+  } catch (error) {
+    void dialog.showMessageBox(mainWindow, {
+      type: 'error',
+      title: 'Streammore update failed',
+      message: 'Streammore could not start the update helper.',
+      detail: portableProblemDetail(error, version),
+    });
+    return;
+  }
+
+  app.quit();
+}
+
+/** Report a failed swap, clear leftovers, and offer a postponed download. */
+async function applyPendingPortableUpdate() {
+  const target = portableUpdate.portableExecutable();
+  if (!target) return;
+  const directory = path.dirname(target);
+  const logPath = portableUpdate.failureLogPathFor(target);
+
+  if (fs.existsSync(logPath)) {
+    let detail = '';
+    try {
+      detail = fs.readFileSync(logPath, 'utf8').trim();
+    } catch {
+      detail = '';
+    }
+    fs.rmSync(logPath, { force: true });
+    await dialog.showMessageBox(mainWindow, {
+      type: 'error',
+      title: 'Streammore update failed',
+      message: 'The last portable update could not be installed.',
+      detail: `${detail}\n\nDownload the new version from:\n${portableUpdate.latestReleasePageUrl()}`,
+    });
+  }
+
+  const cleaned = portableUpdate.cleanupLeftovers(directory, app.getVersion());
+  if (cleaned.removed.length > 0) {
+    console.log('[updates] removed portable leftovers:', cleaned.removed.join(', '));
+  }
+
+  const pending = portableUpdate.findPendingStaged(directory, app.getVersion());
+  if (pending === null) return;
+
+  portableStaged = pending.path;
+  const result = await dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Streammore update ready',
+    message: `Streammore ${pending.version} is ready to install.`,
+    detail: 'It was downloaded earlier. Restart Streammore now to finish updating.',
+    buttons: ['Restart and install', 'Later'],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (result.response === 0) installPortableUpdate(pending.version);
 }
 
 function bundledVlcDir() {
@@ -217,12 +410,16 @@ function setupUpdates() {
 
   autoUpdater.on('update-available', async (info) => {
     if (updatePromptOpen || !mainWindow || mainWindow.isDestroyed()) return;
+    if (!portableUpdate.isNewerVersion(app.getVersion(), info.version)) return;
     updatePromptOpen = true;
+    const portable = portableUpdate.isPortable();
     const result = await dialog.showMessageBox(mainWindow, {
       type: 'info',
       title: 'Streammore update available',
       message: `Streammore ${info.version} is available.`,
-      detail: 'Download the update now? The app will ask before restarting.',
+      detail: portable
+        ? 'Download the new portable build now? Streammore asks again before restarting to replace it.'
+        : 'Download the update now? The app will ask before restarting.',
       buttons: ['Download update', 'Later'],
       defaultId: 0,
       cancelId: 1,
@@ -231,6 +428,38 @@ function setupUpdates() {
       updatePromptOpen = false;
       return;
     }
+
+    if (portable) {
+      try {
+        await downloadPortableUpdate(info.version);
+      } catch (error) {
+        updatePromptOpen = false;
+        console.warn('[updates] portable download failed:', error.message);
+        await dialog.showMessageBox(mainWindow, {
+          type: 'error',
+          title: 'Streammore update failed',
+          message: 'The portable update could not be downloaded.',
+          detail: portableProblemDetail(error, info.version),
+        });
+        return;
+      }
+      const restart = await dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Streammore update ready',
+        message: `Streammore ${info.version} has been downloaded.`,
+        detail: 'Restart Streammore now to replace the portable file. The current file is kept as a backup until the next launch.',
+        buttons: ['Restart and install', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (restart.response === 0) {
+        installPortableUpdate(info.version);
+      } else {
+        updatePromptOpen = false;
+      }
+      return;
+    }
+
     try {
       await autoUpdater.downloadUpdate();
     } catch (error) {
@@ -246,6 +475,9 @@ function setupUpdates() {
 
   autoUpdater.on('update-downloaded', async (info) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
+    // Portable builds take the replacement path above; the installer payload
+    // electron-updater downloads here cannot replace a portable executable.
+    if (portableUpdate.isPortable()) return;
     const result = await dialog.showMessageBox(mainWindow, {
       type: 'info',
       title: 'Streammore update ready',
@@ -324,6 +556,7 @@ if (!gotLock) {
     setupUpdates();
     setupApplicationMenu();
     createWindow();
+    void applyPendingPortableUpdate();
     app.on('activate', () => { if (!mainWindow) createWindow(); });
   });
 }

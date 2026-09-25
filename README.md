@@ -105,6 +105,44 @@ and that the native MKV player parts are packaged, and publishes the release
 assets plus Electron's `latest.yml` metadata. The desktop updater reads that
 GitHub release metadata automatically.
 
+## Portable builds update themselves
+
+`electron-updater` has no portable support. The portable launcher runs the app
+from a temp directory and keeps the launched `.exe` open while it waits for the
+app to exit, so `quitAndInstall()` cannot replace the file the user actually
+launched. The portable build therefore uses its own path, implemented in
+`portable-update.cjs`:
+
+1. the newest release is still resolved through `electron-updater`, so the
+   channel rules (stable releases only, tag must match the version) live in one
+   place;
+2. the published portable executable is downloaded next to the running file as
+   `Streammore-Portable-<version>-x64.exe.update` and verified against the
+   release's `portable.yml` (size and base64 SHA-512) *before* anything is
+   replaced;
+3. a detached PowerShell helper waits for this process and the portable
+   launcher to exit, keeps the previous build as `<name>.exe.old`, replaces the
+   file, and starts the new build.
+
+If the swap cannot happen — for example the executable sits in a read-only
+folder — the helper writes `<name>.exe.update-failed.log` and the next launch
+reports it together with a manual download link. Backups are kept for a day and
+then cleaned up, and a download the user postponed is offered again on the next
+launch. Only files this app created next to the portable executable are ever
+removed.
+
+Every release publishes a `portable.yml` beside `latest.yml`. The workflow
+verifies it against the executable it just built with
+`scripts/verify-portable-channel.cjs` before uploading, so the app can never be
+offered update metadata that does not describe the published file.
+
+Checks for this code path:
+
+```bash
+npm run check
+npm test
+```
+
 ## Code signing
 
 Releases are published unsigned, so Windows may show a SmartScreen or

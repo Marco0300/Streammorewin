@@ -38,7 +38,13 @@ jobs:
           if (!(Test-Path $binding)) { throw "Native VLC binding was not built at $binding" }
           Write-Host "Native VLC binding built: $((Get-Item $binding).Length) bytes"
       - name: Validate desktop shell
-        run: npm run check
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          npm run check
+          if ($LASTEXITCODE -ne 0) { throw "npm run check failed" }
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw "portable update tests failed" }
       - name: Bundle VLC 3 runtime
         shell: pwsh
         run: |
@@ -126,6 +132,28 @@ jobs:
           Write-Host "Packaged VLC runtime: $packagedVlc"
           Write-Host "Packaged native binding: $packagedBinding"
 
+          # Publish the portable channel file the portable build verifies its
+          # download against. sha512 is base64, matching electron-updater.
+          $portableHex = (Get-FileHash $portable.FullName -Algorithm SHA512).Hash.ToLower()
+          $portableBytes = [byte[]]::new($portableHex.Length / 2)
+          for ($i = 0; $i -lt $portableBytes.Length; $i++) {
+            $portableBytes[$i] = [Convert]::ToByte($portableHex.Substring($i * 2, 2), 16)
+          }
+          $portableSha = [Convert]::ToBase64String($portableBytes)
+          $releaseDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+          @(
+            "version: $version"
+            "files:"
+            "  - url: $($portable.Name)"
+            "    sha512: $portableSha"
+            "    size: $($portable.Length)"
+            "path: $($portable.Name)"
+            "sha512: $portableSha"
+            "releaseDate: '$releaseDate'"
+          ) | Set-Content -LiteralPath dist/portable.yml -Encoding utf8
+          node scripts/verify-portable-channel.cjs dist/portable.yml $portable.FullName
+          if ($LASTEXITCODE -ne 0) { throw "portable.yml does not describe the built portable executable" }
+
           Get-FileHash $setup.FullName -Algorithm SHA256
           Get-FileHash $portable.FullName -Algorithm SHA256
       - name: Upload Windows installers
@@ -134,6 +162,7 @@ jobs:
           name: streammore-windows-${{ github.sha }}
           path: |
             dist/*.exe
+            dist/*.yml
           if-no-files-found: error
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -143,4 +172,5 @@ jobs:
           files: |
             dist/*.exe
             dist/latest*.yml
+            dist/portable.yml
             dist/*.blockmap
