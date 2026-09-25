@@ -83,7 +83,20 @@ jobs:
         shell: pwsh
         run: Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
       - name: Build Windows installers
-        run: npm run dist:win
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          npm run dist:win 2>&1 | Tee-Object -FilePath build.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            $all = Get-Content build.log | Where-Object { $_ -match '\S' }
+            $hits = $all | Where-Object { $_ -match 'error|Error|cannot|Cannot|failed|ENOENT|EPERM|not found|must be' } | Select-Object -Last 10
+            if ($hits.Count -lt 3) { $hits = $all | Select-Object -Last 10 }
+            foreach ($line in $hits) {
+              Write-Host "::warning title=DIST-DIAG::$(($line -replace "`r?`n", ' '))"
+            }
+            throw "electron-builder failed with exit code $code"
+          }
       - name: Verify Windows artifacts
         shell: pwsh
         run: |
