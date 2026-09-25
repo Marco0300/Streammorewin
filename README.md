@@ -65,4 +65,23 @@ The Windows workflow builds both executables, verifies that they are complete,
 and publishes the release assets plus Electron's `latest.yml` metadata. The
 desktop updater reads that GitHub release metadata automatically.
 
+## Code signing
+
+The release workflow signs tagged Windows builds with a SHA-256 code-signing
+certificate. Keep the `.pfx` file and password out of Git. Add these GitHub
+repository Actions secrets before creating the next release:
+
+- `WINDOWS_CODE_SIGNING_CERTIFICATE_BASE64` — base64 contents of the `.pfx`
+- `WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD` — the `.pfx` password
+
+PowerShell example for encoding the certificate locally:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("Streammore-CodeSigning.pfx")) | Set-Clipboard
+```
+
+The workflow refuses to publish a tagged release when either signing secret is
+missing. The existing `v1.0.1` release was created before signing was enabled;
+publish the next version after adding the secrets.
+
 The Electron shell keeps cookies in the normal persistent Electron session, keeps Node integration disabled, denies renderer permission prompts, prevents the app from navigating away from the Streammore origin, and opens external links in the system browser.

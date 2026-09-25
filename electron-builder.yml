@@ -16,11 +16,9 @@ asar: true
 npmRebuild: false
 
 win:
-  # The first Windows artifact is intentionally unsigned; the build runner does
-  # not have a release certificate yet. Disabling post-packaging signtool edits
-  # also lets the Linux validation job create a complete unsigned installer
-  # instead of leaving a tiny NSIS stub after a Wine failure.
-  signAndEditExecutable: false
+  signAndEditExecutable: true
+  signingHashAlgorithms: [sha256]
+  rfc3161TimeStampServer: http://timestamp.digicert.com
   target:
     - target: nsis
       arch: [x64]
