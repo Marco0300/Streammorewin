@@ -36,13 +36,15 @@ jobs:
         shell: pwsh
         run: |
           $vlcVersion = "3.0.21"
-          $archive = "vlc-$vlcVersion-win64.zip"
+          $archive = "vlc-$vlcVersion-win64.7z"
           Invoke-WebRequest -Uri "https://get.videolan.org/vlc/$vlcVersion/win64/$archive" -OutFile $archive
-          Expand-Archive -Path $archive -DestinationPath vlc-extracted -Force
+          $sevenZip = (Get-Command 7z.exe -ErrorAction Stop).Source
+          & $sevenZip x $archive "-ovlc-extracted" -y
+          if ($LASTEXITCODE -ne 0) { throw "7-Zip failed to extract VLC (exit $LASTEXITCODE)" }
           $lib = Get-ChildItem -Path vlc-extracted -Filter libvlc.dll -Recurse | Select-Object -First 1
           if ($null -eq $lib) { throw "libvlc.dll was not found in the VLC archive" }
           New-Item -ItemType Directory -Force vendor/vlc | Out-Null
-          Copy-Item "$($lib.Directory.FullName)/*" vendor/vlc -Recurse -Force
+          Copy-Item -Path (Join-Path $lib.Directory.FullName '*') -Destination vendor/vlc -Recurse -Force
           if (!(Test-Path vendor/vlc/plugins)) { throw "VLC plugins directory was not bundled" }
       - name: Remove stale build output
         shell: pwsh
