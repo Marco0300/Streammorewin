@@ -44,22 +44,10 @@ jobs:
           New-Item -ItemType Directory -Force vendor/vlc | Out-Null
           Copy-Item "$($lib.Directory.FullName)/*" vendor/vlc -Recurse -Force
           if (!(Test-Path vendor/vlc/plugins)) { throw "VLC plugins directory was not bundled" }
-      - name: Require signing certificate for tagged releases
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        env:
-          CSC_LINK: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE_BASE64 }}
-          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:CSC_LINK)) { throw "WINDOWS_CODE_SIGNING_CERTIFICATE_BASE64 secret is missing" }
-          if ([string]::IsNullOrWhiteSpace($env:CSC_KEY_PASSWORD)) { throw "WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD secret is missing" }
       - name: Remove stale build output
         shell: pwsh
         run: Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
       - name: Build Windows installers
-        env:
-          CSC_LINK: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE_BASE64 }}
-          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD }}
         run: npm run dist:win
       - name: Verify Windows artifacts
         shell: pwsh

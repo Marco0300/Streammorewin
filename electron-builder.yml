@@ -22,7 +22,9 @@ extraResources:
     to: vendor/vlc
 
 win:
-  signAndEditExecutable: true
+  # This release is intentionally unsigned. Add a Windows code-signing
+  # certificate later and switch this to true before publishing a trusted build.
+  signAndEditExecutable: false
   signingHashAlgorithms: [sha256]
   rfc3161TimeStampServer: http://timestamp.digicert.com
   target:

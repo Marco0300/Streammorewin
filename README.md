@@ -67,9 +67,12 @@ desktop updater reads that GitHub release metadata automatically.
 
 ## Code signing
 
-The release workflow signs tagged Windows builds with a SHA-256 code-signing
-certificate. Keep the `.pfx` file and password out of Git. Add these GitHub
-repository Actions secrets before creating the next release:
+The current release workflow publishes unsigned Windows builds. Windows may
+show a SmartScreen or unknown-publisher warning when installing them.
+
+For a future trusted release, the workflow can sign tagged builds with a
+SHA-256 code-signing certificate. Keep the `.pfx` file and password out of Git.
+Add these GitHub repository Actions secrets before enabling signing:
 
 - `WINDOWS_CODE_SIGNING_CERTIFICATE_BASE64` — base64 contents of the `.pfx`
 - `WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD` — the `.pfx` password
@@ -80,9 +83,8 @@ PowerShell example for encoding the certificate locally:
 [Convert]::ToBase64String([IO.File]::ReadAllBytes("Streammore-CodeSigning.pfx")) | Set-Clipboard
 ```
 
-The workflow refuses to publish a tagged release when either signing secret is
-missing. The existing `v1.0.1` release was created before signing and bundled VLC were
-enabled; publish `v1.0.2` after adding the certificate secrets.
+The existing `v1.0.1` release was created before signing and bundled VLC were
+enabled. The `v1.0.2` release is intentionally unsigned.
 
 The Electron shell keeps cookies in the normal persistent Electron session, keeps Node integration disabled, denies renderer permission prompts, prevents the app from navigating away from the Streammore origin, and opens external links in the system browser.
 
