@@ -25,8 +25,13 @@ win:
   # This release is intentionally unsigned. Add a Windows code-signing
   # certificate later and switch this to true before publishing a trusted build.
   signAndEditExecutable: false
-  signingHashAlgorithms: [sha256]
-  rfc3161TimeStampServer: http://timestamp.digicert.com
+  # Signing options must live under signtoolOptions: electron-builder 26 rejects
+  # unknown keys inside win (additionalProperties: false). They are inert while
+  # signAndEditExecutable is false, and are used as soon as a certificate is
+  # supplied through the CSC_LINK / CSC_KEY_PASSWORD environment variables.
+  signtoolOptions:
+    signingHashAlgorithms: [sha256]
+    rfc3161TimeStampServer: http://timestamp.digicert.com
   target:
     - target: nsis
       arch: [x64]

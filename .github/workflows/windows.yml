@@ -29,7 +29,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Rebuild VLC native binding for Electron
-        run: npx --yes @electron/rebuild@3 -f -w electron-vlc-player
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          npx --yes @electron/rebuild@3 -f -w electron-vlc-player
+          if ($LASTEXITCODE -ne 0) { throw "electron-rebuild failed with exit code $LASTEXITCODE" }
+          $binding = "node_modules/electron-vlc-player/build/Release/vlc_binding.node"
+          if (!(Test-Path $binding)) { throw "Native VLC binding was not built at $binding" }
+          Write-Host "Native VLC binding built: $((Get-Item $binding).Length) bytes"
       - name: Validate desktop shell
         run: npm run check
       - name: Bundle VLC 3 runtime
@@ -108,6 +115,17 @@ jobs:
           if ($null -eq $setup -or $setup.Length -lt 10MB) { throw "Installer is missing or suspiciously small" }
           if ($null -eq $portable -or $portable.Length -lt 50MB) { throw "Portable executable is missing or suspiciously small" }
           if ($null -eq $metadata -or $metadata.Length -lt 100) { throw "Electron update metadata latest.yml is missing" }
+
+          # Verify the packaged layout actually contains the native MKV player parts
+          $packagedVlc = "dist/win-unpacked/resources/vendor/vlc"
+          $packagedBinding = "dist/win-unpacked/resources/app.asar.unpacked/node_modules/electron-vlc-player/build/Release/vlc_binding.node"
+          if (!(Test-Path "$packagedVlc/libvlc.dll")) { throw "Packaged app is missing vendor/vlc/libvlc.dll" }
+          if (!(Test-Path "$packagedVlc/libvlccore.dll")) { throw "Packaged app is missing vendor/vlc/libvlccore.dll" }
+          if (!(Test-Path "$packagedVlc/plugins")) { throw "Packaged app is missing the VLC plugins directory" }
+          if (!(Test-Path $packagedBinding)) { throw "Packaged app is missing the unpacked native VLC binding" }
+          Write-Host "Packaged VLC runtime: $packagedVlc"
+          Write-Host "Packaged native binding: $packagedBinding"
+
           Get-FileHash $setup.FullName -Algorithm SHA256
           Get-FileHash $portable.FullName -Algorithm SHA256
       - name: Upload Windows installers
