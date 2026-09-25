@@ -37,75 +37,48 @@ jobs:
         run: |
           $ErrorActionPreference = "Continue"
           $vlcVersion = "3.0.21"
-          $log = New-Object System.Collections.Generic.List[string]
+          $expectedSha = "9d2b24d6bc4196b3da8d181a3878678ba272e2a7690321f8826da76a69b2fb9c"
+          $archive = "vlc-$vlcVersion-win64.7z"
+          $url = "https://get.videolan.org/vlc/$vlcVersion/win64/$archive"
+
+          # VideoLAN answers non-browser user agents with an HTML "download will start"
+          # interstitial (~29 KB, HTTP 200) that lists mirrors instead of the runtime, so
+          # PowerShell's Invoke-WebRequest cannot fetch this file. curl.exe is shipped with
+          # Windows and is handed the real archive.
+          curl.exe -L --fail --retry 3 --retry-delay 2 -o $archive $url
+          if ($LASTEXITCODE -ne 0) { throw "curl failed to download $url (exit $LASTEXITCODE)" }
+
+          $size = (Get-Item $archive).Length
+          if ($size -lt 10MB) { throw "Downloaded VLC runtime is only $size bytes; the real archive is about 37 MB" }
+
+          $sha = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+          if ($sha -ne $expectedSha) { throw "VLC archive checksum mismatch: expected $expectedSha, got $sha" }
+          Write-Host "VLC $vlcVersion runtime downloaded: $size bytes, sha256 $sha"
+
+          $sevenZip = @(
+            "C:\Program Files\7-Zip\7z.exe",
+            "C:\Program Files (x86)\7-Zip\7z.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if ($null -eq $sevenZip) { throw "7-Zip is not available on this runner" }
 
           $extractDir = Join-Path $PWD "vlc-extracted"
           Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $extractDir | Out-Null
+          & $sevenZip x $archive "-o$extractDir" -y -bso0 -bsp0
+          if ($LASTEXITCODE -ne 0) { throw "7-Zip failed to extract the VLC runtime (exit $LASTEXITCODE)" }
 
-          function Get-Libvlc {
-            param([string]$Root)
-            return Get-ChildItem -Path $Root -Filter "libvlc.dll" -Recurse -Force -ErrorAction SilentlyContinue | Select-Object -First 1
-          }
-
-          $lib = $null
-
-          # Attempt 1: canonical 7z archive via the bundled 7-Zip (VLC's primary Windows package)
-          try {
-            $sevenZip = @(
-              "C:\Program Files\7-Zip\7z.exe",
-              "C:\Program Files (x86)\7-Zip\7z.exe"
-            ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-            if ($null -eq $sevenZip) {
-              $found = Get-Command 7z.exe -ErrorAction SilentlyContinue
-              if ($found) { $sevenZip = $found.Source }
-            }
-            if ($null -eq $sevenZip) {
-              $log.Add("7z: not available")
-            } else {
-              $archive7z = "vlc-$vlcVersion-win64.7z"
-              Invoke-WebRequest -Uri "https://get.videolan.org/vlc/$vlcVersion/win64/$archive7z" -OutFile $archive7z
-              $log.Add("7z: downloaded $((Get-Item $archive7z).Length) bytes via $sevenZip")
-              & $sevenZip x $archive7z "-o$extractDir" -y -bso0 -bsp0
-              $log.Add("7z: exit $LASTEXITCODE")
-              $lib = Get-Libvlc -Root $extractDir
-              $log.Add("7z: libvlc.dll = $(if ($lib) { $lib.FullName } else { 'NOT FOUND' })")
-            }
-          } catch {
-            $log.Add("7z: FAILED $($_.Exception.Message)")
-          }
-
-          # Attempt 2: zip archive via Expand-Archive
-          if ($null -eq $lib) {
-            try {
-              $archiveZip = "vlc-$vlcVersion-win64.zip"
-              Invoke-WebRequest -Uri "https://get.videolan.org/vlc/$vlcVersion/win64/$archiveZip" -OutFile $archiveZip
-              $log.Add("zip: downloaded $((Get-Item $archiveZip).Length) bytes")
-              Expand-Archive -LiteralPath (Join-Path $PWD $archiveZip) -DestinationPath $extractDir -Force -ErrorAction Stop
-              $log.Add("zip: Expand-Archive completed")
-              $lib = Get-Libvlc -Root $extractDir
-              $log.Add("zip: libvlc.dll = $(if ($lib) { $lib.FullName } else { 'NOT FOUND' })")
-            } catch {
-              $log.Add("zip: FAILED $($_.Exception.Message)")
-            }
-          }
-
-          # Diagnostics: surface the top-level extraction tree through annotations (readable via the API)
-          $tree = Get-ChildItem -Path $extractDir -Force -ErrorAction SilentlyContinue |
-            Select-Object -First 12 -ExpandProperty Name
-          $log.Add("tree: $($tree -join ', ')")
-
-          foreach ($line in $log) {
-            Write-Host "::warning title=VLC-DIAG::$(($line -replace "`r?`n", ' '))"
-          }
-
+          $lib = Get-ChildItem -Path $extractDir -Filter "libvlc.dll" -Recurse -Force |
+            Select-Object -First 1
           if ($null -eq $lib) { throw "libvlc.dll was not found in the extracted VLC runtime" }
 
           New-Item -ItemType Directory -Force vendor/vlc | Out-Null
           Copy-Item -Path (Join-Path $lib.Directory.FullName '*') -Destination vendor/vlc -Recurse -Force
+          if (!(Test-Path vendor/vlc/libvlc.dll)) { throw "libvlc.dll was not copied into vendor/vlc" }
           if (!(Test-Path vendor/vlc/plugins)) { throw "VLC plugins directory was not bundled" }
-          Write-Host "::warning title=VLC-DIAG::bundled from $($lib.Directory.FullName)"
-          Write-Host "Bundled VLC runtime from $($lib.Directory.FullName)"
+          if (!(Test-Path vendor/vlc/libvlccore.dll)) { throw "libvlccore.dll was not bundled" }
+
+          Write-Host "Bundled VLC $vlcVersion runtime from $($lib.Directory.FullName)"
+          Get-ChildItem vendor/vlc | Select-Object -First 25 -ExpandProperty Name
       - name: Remove stale build output
         shell: pwsh
         run: Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
