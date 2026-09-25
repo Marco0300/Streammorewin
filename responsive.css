@@ -1,0 +1,70 @@
+/* Desktop-only density layer for 13–14 inch Windows laptops.
+   The web client remains unchanged for normal browsers; Electron injects this
+   sheet after loading so the desktop app adapts to both viewport width and the
+   short work area common on 1366x768 laptops. */
+
+@media (max-width: 1400px), (max-height: 820px) {
+  :root { --nav-h: 58px; }
+
+  .nav {
+    gap: 12px;
+    padding-left: 24px;
+    padding-right: 24px;
+    overflow: hidden;
+  }
+  .nav-logo { width: 120px; height: 42px; }
+  .nav-links {
+    gap: 11px;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    white-space: nowrap;
+  }
+  .nav-links::-webkit-scrollbar { display: none; }
+  .nav-link { font-size: 12px; }
+  .nav-right { gap: 8px; min-width: 0; }
+  .search-box.open input { width: 180px; }
+
+  .billboard {
+    min-height: 76vh;
+    padding-left: 3vw;
+    padding-right: 3vw;
+    padding-bottom: 5vh;
+  }
+  .billboard-content { max-width: 560px; }
+  .billboard-title { font-size: clamp(32px, 4.6vw, 60px); }
+  .billboard-overview { font-size: clamp(13px, 1.2vw, 16px); }
+
+  .row-head { padding-left: 3vw; padding-right: 3vw; }
+  .row-strip { padding-left: 3vw; padding-right: 3vw; }
+  .row { margin-bottom: 1.6vw; }
+  .row-title { font-size: 18px; }
+  .card { width: 170px; }
+  .card-body { padding: 8px 10px 11px; }
+
+  .page { padding-left: 3vw; padding-right: 3vw; }
+  .page-title { font-size: 26px; margin-bottom: 16px; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 7px; }
+
+  .detail-hero { padding-left: 3vw; padding-right: 3vw; }
+  .detail-section { padding-left: 3vw; padding-right: 3vw; }
+  .detail-hero-inner { padding-top: calc(var(--nav-h) + 15vh); }
+  .detail-title { font-size: clamp(28px, 4vw, 52px); }
+  .detail-overview { font-size: 14px; max-width: 560px; }
+  .episode-still { flex-basis: 132px; }
+
+  .player-top { padding: 16px 22px; }
+  .player-bottom { padding: 0 22px 20px; }
+  .player-panel { width: 340px; }
+}
+
+@media (max-width: 1180px), (max-height: 740px) {
+  .nav-logo { width: 106px; }
+  .nav-links { gap: 9px; }
+  .nav-right .nav-action span { display: none; }
+  .search-box.open input { width: 150px; }
+  .card { width: 154px; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(138px, 1fr)); }
+  .billboard { min-height: 72vh; }
+  .billboard-content { max-width: 500px; }
+}

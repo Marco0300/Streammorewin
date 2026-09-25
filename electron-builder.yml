@@ -1,0 +1,52 @@
+appId: com.streammore.desktop
+productName: Streammore
+executableName: streammore
+artifactName: Streammore-${version}-${arch}.${ext}
+
+copyright: Copyright © 2026 Streammore
+
+files:
+  - main.cjs
+  - preload.cjs
+  - responsive.css
+  - package.json
+  - assets/**
+
+asar: true
+npmRebuild: false
+
+win:
+  # The first Windows artifact is intentionally unsigned; the build runner does
+  # not have a release certificate yet. Disabling post-packaging signtool edits
+  # also lets the Linux validation job create a complete unsigned installer
+  # instead of leaving a tiny NSIS stub after a Wine failure.
+  signAndEditExecutable: false
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  icon: assets/streammore-icon.png
+  artifactName: Streammore-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Streammore
+  artifactName: Streammore-Setup-${version}-${arch}.${ext}
+
+portable:
+  artifactName: Streammore-Portable-${version}-${arch}.${ext}
+
+directories:
+  output: dist
+  buildResources: assets
+
+publish:
+  provider: github
+  owner: Marco0300
+  repo: Streammorewin
+  releaseType: release

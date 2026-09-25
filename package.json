@@ -1,0 +1,22 @@
+{
+  "name": "streammore-windows",
+  "version": "1.0.1",
+  "description": "Standalone Streammore desktop app for Windows",
+  "productName": "Streammore",
+  "main": "main.cjs",
+  "author": "Streammore",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check main.cjs && node --check preload.cjs",
+    "dist:win": "electron-builder --win nsis portable --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "43.4.0",
+    "electron-builder": "26.15.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}

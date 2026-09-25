@@ -1,0 +1,61 @@
+name: Build Streammore Windows
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "**"
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate desktop shell
+        run: npm run check
+      - name: Remove stale build output
+        shell: pwsh
+        run: Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
+      - name: Build Windows installers
+        run: npm run dist:win
+      - name: Verify Windows artifacts
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -like 'v*' -and $env:GITHUB_REF_NAME -ne "v$version") { throw "Git tag does not match desktop package version" }
+          $setup = Get-ChildItem dist/Streammore-Setup-*-x64.exe | Select-Object -First 1
+          $portable = Get-ChildItem dist/Streammore-Portable-*-x64.exe | Select-Object -First 1
+          $metadata = Get-ChildItem dist/latest.yml | Select-Object -First 1
+          if ($null -eq $setup -or $setup.Length -lt 10MB) { throw "Installer is missing or suspiciously small" }
+          if ($null -eq $portable -or $portable.Length -lt 50MB) { throw "Portable executable is missing or suspiciously small" }
+          if ($null -eq $metadata -or $metadata.Length -lt 100) { throw "Electron update metadata latest.yml is missing" }
+          Get-FileHash $setup.FullName -Algorithm SHA256
+          Get-FileHash $portable.FullName -Algorithm SHA256
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: streammore-windows-${{ github.sha }}
+          path: |
+            dist/*.exe
+          if-no-files-found: error
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.exe
+            dist/latest*.yml
+            dist/*.blockmap
