@@ -36,11 +36,11 @@ jobs:
         shell: pwsh
         run: |
           $vlcVersion = "3.0.21"
-          $archive = "vlc-$vlcVersion-win64.7z"
+          $archive = "vlc-$vlcVersion-win64.zip"
           Invoke-WebRequest -Uri "https://get.videolan.org/vlc/$vlcVersion/win64/$archive" -OutFile $archive
-          $sevenZip = (Get-Command 7z.exe -ErrorAction Stop).Source
-          & $sevenZip x $archive "-ovlc-extracted" -y
-          if ($LASTEXITCODE -ne 0) { throw "7-Zip failed to extract VLC (exit $LASTEXITCODE)" }
+          New-Item -ItemType Directory -Force vlc-extracted | Out-Null
+          tar -xf $archive -C vlc-extracted
+          if ($LASTEXITCODE -ne 0) { throw "tar failed to extract VLC (exit $LASTEXITCODE)" }
           $lib = Get-ChildItem -Path vlc-extracted -Filter libvlc.dll -Recurse | Select-Object -First 1
           if ($null -eq $lib) { throw "libvlc.dll was not found in the VLC archive" }
           New-Item -ItemType Directory -Force vendor/vlc | Out-Null
