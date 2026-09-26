@@ -1,6 +1,6 @@
 {
   "name": "streammore-windows",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Standalone Streammore desktop app for Windows",
   "productName": "Streammore",
   "main": "main.cjs",
@@ -10,7 +10,7 @@
   "scripts": {
     "start": "electron .",
     "check": "node --check main.cjs && node --check preload.cjs && node --check portable-update.cjs && node --check scripts/verify-portable-channel.cjs",
-    "test": "node test/portable-update.test.cjs",
+    "test": "node test/portable-update.test.cjs && node --test test/native-playback.test.cjs",
     "dist:win": "electron-builder --win nsis portable --x64 --publish never"
   },
   "devDependencies": {

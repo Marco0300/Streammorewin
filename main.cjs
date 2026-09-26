@@ -312,12 +312,204 @@ async function removeVlcSurface() {
   `).catch(() => {});
 }
 
+// --- Native (libVLC) playback of service streams ---------------------------
+//
+// The web player cannot demux Matroska, so Xtream titles would fall back to the
+// server's HLS rendition. The Android client instead plays the provider's real
+// file (Models.kt: nativeUrl ?: url) with Media3. Here the same URL is handed to
+// the bundled libVLC instance, and libVLC's clock is mirrored back to the page
+// so progress, resume and next-episode keep working. The URL selection rule
+// itself lives in the web client (public/native-playback.js).
+
+const NATIVE_EVENT_CHANNEL = 'streammore:native-event';
+let nativeClockTimer = null;
+let nativeEventsHooked = false;
+
+/** Only the configured Streammore origin may be played back natively. */
+function allowedNativeUrl(value) {
+  try {
+    const url = new URL(String(value ?? ''));
+    if (!ALLOWED_PROTOCOLS.has(url.protocol)) return null;
+    if (url.origin !== new URL(configuredUrl()).origin) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function forwardNativeEvent(data) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send(NATIVE_EVENT_CHANNEL, data);
+}
+
+async function ensureVlcSurface() {
+  if (!mainWindow || mainWindow.isDestroyed()) throw new Error('the window is not available');
+  await mainWindow.webContents.executeJavaScript(`
+    if (!document.getElementById('streammore-vlc-surface')) {
+      const surface = document.createElement('div');
+      surface.id = 'streammore-vlc-surface';
+      surface.style.cssText = 'position:fixed;inset:0;z-index:1000;background:#000;';
+      document.body.appendChild(surface);
+    }
+  `);
+}
+
+function stopNativeClock() {
+  if (nativeClockTimer) {
+    clearInterval(nativeClockTimer);
+    nativeClockTimer = null;
+  }
+}
+
+/** libVLC does not emit a steady tick, so the page is fed one every second. */
+function startNativeClock() {
+  stopNativeClock();
+  nativeClockTimer = setInterval(() => {
+    if (!vlcPlayer) return;
+    try {
+      forwardNativeEvent({
+        type: 'time',
+        positionMs: Number(vlcPlayer.getTime()) || 0,
+        durationMs: Number(vlcPlayer.getLength()) || 0,
+        playing: vlcPlayer.isPlaying(),
+      });
+    } catch {
+      // The player is mid-teardown; the next event will settle it.
+    }
+  }, 1000);
+}
+
+function sendNativeAudioTracks() {
+  if (!vlcPlayer) return;
+  try {
+    const tracks = vlcPlayer.getAudioTracks() || [];
+    if (tracks.length) forwardNativeEvent({ type: 'audioTracks', tracks });
+  } catch {
+    // Track list is not available yet; 'playing' fires again on the next source.
+  }
+}
+
+function hookVlcEvents() {
+  if (nativeEventsHooked || !vlcPlayer) return;
+  nativeEventsHooked = true;
+  vlcPlayer.on('playing', () => {
+    forwardNativeEvent({ type: 'playing' });
+    startNativeClock();
+    sendNativeAudioTracks();
+  });
+  vlcPlayer.on('paused', () => forwardNativeEvent({ type: 'paused' }));
+  vlcPlayer.on('buffering', () => forwardNativeEvent({ type: 'buffering' }));
+  vlcPlayer.on('stopped', () => {
+    stopNativeClock();
+    forwardNativeEvent({ type: 'stopped' });
+  });
+  vlcPlayer.on('endReached', () => {
+    stopNativeClock();
+    forwardNativeEvent({ type: 'ended' });
+  });
+  vlcPlayer.on('error', () => {
+    stopNativeClock();
+    forwardNativeEvent({ type: 'error' });
+  });
+}
+
+async function ensureVlcPlayer() {
+  if (vlcPlayer) return vlcPlayer;
+  const vlcDir = bundledVlcDir();
+  if (!fs.existsSync(path.join(vlcDir, 'libvlc.dll'))) {
+    throw new Error('The bundled VLC runtime is missing.');
+  }
+  const { VlcPlayer } = require('electron-vlc-player');
+  vlcPlayer = new VlcPlayer({
+    window: mainWindow,
+    container: '#streammore-vlc-surface',
+    vlcDir,
+    controls: true,
+    pageFullscreenButton: true,
+    hardwareAcceleration: 'd3d11va',
+  });
+  await vlcPlayer.embed();
+  hookVlcEvents();
+  return vlcPlayer;
+}
+
+/** Stop native playback but keep the embedded player for the next title. */
+async function stopNativePlayback() {
+  stopNativeClock();
+  if (vlcPlayer) {
+    try { vlcPlayer.unloadMedia(); } catch (error) { console.warn('[vlc] unload failed:', error.message); }
+  }
+  await removeVlcSurface();
+  forwardNativeEvent({ type: 'stopped' });
+}
+
+function setupNativePlayback() {
+  ipcMain.handle('streammore:native-play', async (_event, payload = {}) => {
+    const url = allowedNativeUrl(payload.url);
+    if (url === null) {
+      return { ok: false, error: 'Streammore only plays its own stream URLs in the native player.' };
+    }
+    try {
+      await ensureVlcSurface();
+      const player = await ensureVlcPlayer();
+      const positionMs = Number(payload.positionMs);
+      player.setSource(url, {
+        autoplay: true,
+        // A remote 3 GB Matroska needs a little slack before it starts.
+        mediaOptions: [':network-caching=2000'],
+      });
+      if (Number.isFinite(positionMs) && positionMs > 5000) {
+        // Seeking before libVLC has parsed the container is ignored, so resume
+        // once it is playing rather than immediately.
+        setTimeout(() => {
+          try { vlcPlayer?.setTime(Math.round(positionMs)); } catch { /* stopped meanwhile */ }
+        }, 1500);
+      }
+      return { ok: true };
+    } catch (error) {
+      console.warn('[vlc] native playback failed:', error.message);
+      await stopNativePlayback().catch(() => {});
+      return { ok: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('streammore:native-stop', async () => {
+    await stopNativePlayback();
+    return { ok: true };
+  });
+
+  ipcMain.handle('streammore:native-seek', (_event, positionMs) => {
+    const value = Number(positionMs);
+    if (!vlcPlayer || !Number.isFinite(value)) return { ok: false };
+    vlcPlayer.setTime(Math.max(0, Math.round(value)));
+    return { ok: true };
+  });
+
+  // The page picks the track (same English preference as the Android client)
+  // from the list libVLC reports, then asks for it here.
+  ipcMain.handle('streammore:native-audio-track', (_event, trackId) => {
+    const id = Number(trackId);
+    if (!vlcPlayer || !Number.isFinite(id)) return { ok: false };
+    try {
+      vlcPlayer.setAudioTrack(id);
+      return { ok: true };
+    } catch (error) {
+      console.warn('[vlc] audio track switch failed:', error.message);
+      return { ok: false, error: error.message };
+    }
+  });
+}
+
 async function closeMkvPlayer() {
   if (vlcPlayer) {
     try { vlcPlayer.destroy(); } catch (error) { console.warn('[vlc] destroy failed:', error.message); }
     vlcPlayer = null;
   }
+  nativeEventsHooked = false;
+  stopNativeClock();
   await removeVlcSurface();
+  // Tell the page playback is over so it can save progress and restore its UI.
+  forwardNativeEvent({ type: 'stopped' });
 }
 
 async function openMkvFile() {
@@ -329,44 +521,16 @@ async function openMkvFile() {
   });
   if (result.canceled || !result.filePaths[0]) return;
 
-  const vlcDir = bundledVlcDir();
-  if (!fs.existsSync(path.join(vlcDir, 'libvlc.dll'))) {
-    await dialog.showMessageBox(mainWindow, {
-      type: 'error',
-      title: 'MKV playback is not available',
-      message: 'The bundled VLC runtime is missing.',
-      detail: 'Reinstall the signed Streammore Windows package or rebuild it with the VLC runtime included.',
-    });
-    return;
-  }
-
   try {
-    await mainWindow.webContents.executeJavaScript(`
-      document.getElementById('streammore-vlc-surface')?.remove();
-      const surface = document.createElement('div');
-      surface.id = 'streammore-vlc-surface';
-      surface.style.cssText = 'position:fixed;inset:0;z-index:1000;background:#000;';
-      document.body.appendChild(surface);
-    `);
-
-    if (!vlcPlayer) {
-      const { VlcPlayer } = require('electron-vlc-player');
-      vlcPlayer = new VlcPlayer({
-        window: mainWindow,
-        container: '#streammore-vlc-surface',
-        vlcDir,
-        controls: true,
-        pageFullscreenButton: true,
-        hardwareAcceleration: 'd3d11va',
-      });
-      await vlcPlayer.embed();
-    }
+    await removeVlcSurface();
+    await ensureVlcSurface();
+    await ensureVlcPlayer();
     vlcPlayer.setSource(result.filePaths[0]);
   } catch (error) {
     await closeMkvPlayer();
     await dialog.showMessageBox(mainWindow, {
       type: 'error',
-      title: 'Could not open MKV file',
+      title: 'MKV playback is not available',
       message: 'Streammore could not start the native VLC player.',
       detail: error.message,
     });
@@ -555,6 +719,7 @@ if (!gotLock) {
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
     setupUpdates();
     setupApplicationMenu();
+    setupNativePlayback();
     createWindow();
     void applyPendingPortableUpdate();
     app.on('activate', () => { if (!mainWindow) createWindow(); });

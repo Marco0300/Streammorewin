@@ -45,7 +45,48 @@ press `Ctrl+O` to open a local `.mkv`/`.mka` file. VLC handles Matroska video,
 audio tracks, subtitle tracks, seeking, and fullscreen independently of
 Chromium's HTML5 limitations, which do not include Matroska support.
 
-Streams played from the service continue to use the existing HLS player.
+## Native Xtream playback
+
+Xtream movies and series are published by `/api/streams` twice: as our HLS
+rendition (`…/content/<token>.m3u8`) and as the provider's own file
+(`…/content/<token>.mkv`, exposed as `nativeUrl` + `sourceExtension`). The
+Android TV client plays the provider file — `Models.kt`:
+
+```kotlin
+fun tvUrl(): String = nativeUrl?.takeIf { it.isNotBlank() } ?: url
+```
+
+This app matches that. The bundled libVLC demuxes Matroska, so the player asks
+for the same `.mkv` instead of the rendition, and falls back to the HLS
+rendition whenever the provider file is unavailable — exactly the behaviour a
+browser gets everywhere else.
+
+How the two halves cooperate:
+
+| Layer | File | Responsibility |
+| --- | --- | --- |
+| Web client | `public/native-playback.js` | Decides the URL (Android's `tvUrl()` rule) |
+| Web client | `public/player.js` | Calls the bridge, mirrors libVLC's clock into progress |
+| Shell | `preload.cjs` | Advertises `streammoreDesktop.nativePlayback` |
+| Shell | `main.cjs` | Plays the URL in libVLC, reports events back |
+
+Behaviour worth knowing:
+
+* Only the configured Streammore origin may be handed to libVLC; local files
+  reach the player solely through **Open MKV file…**.
+* Progress, resume and "next episode" keep working: the shell reports libVLC's
+  position every second and the player saves that as usual.
+* The page keeps a slim bar above the video window (a native window cannot be
+  overlapped by page content) with a back button, because the standard overlay
+  would sit underneath the video.
+* libVLC reports its audio tracks and the player picks English, mirroring the
+  Android client's `setPreferredAudioLanguage("en")`.
+* If the native player cannot start within 25 s, the title continues on the HLS
+  rendition rather than failing.
+* Live channels always use the rendition; there is no provider file to ask for.
+
+Everything else streamed from the service continues to use the HLS player.
+
 
 The VLC runtime is downloaded by the Windows build workflow and is never checked
 into Git. The bundled directory keeps VLC's own licence files (`COPYING.txt`,
