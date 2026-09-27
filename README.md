@@ -116,7 +116,34 @@ contains `resources/vendor/vlc/libvlc.dll`, `libvlccore.dll`, the `plugins`
 directory, and the unpacked native binding. A build that would ship a Streammore
 without MKV support fails instead of publishing.
 
+## Sign in with a code
+
+The sign-in screen offers a second option beside the password form: the app shows
+a short code (for example `2M4W-M2N7`), and you approve it from a device that is
+already signed in — **Account & devices → Link device**. The app polls until the
+session appears and then signs in exactly as a password would.
+
+This is the same method the TV client has, and it exists for the same reason:
+typing a long password on a lean-back device is miserable. It is the server's
+standard device flow (`src/device-auth.js`), so the resulting session appears in
+the devices list like any other.
+
+* Codes live for 10 minutes and are polled no faster than every 3 s (the server
+  states its own interval, usually 5 s).
+* An expired or replaced code is answered with a new one rather than an error.
+* `Escape` or **Cancel** releases the code immediately, as does navigating away.
+* Re-polling a redeemed code returns the same session, so a dropped reply cannot
+  cost the pairing.
+* The option only appears where the app advertises the capability
+  (`streammoreDesktop.deviceSignIn`), so browsers keep the password form alone.
+
+Implementation lives in the web client: `public/device-signin.js` holds the
+poll-reply rules, `public/app.js` renders the card and drives the requests. The
+shell only advertises the capability in `preload.cjs`; the page's own requests
+land in the same Electron session, so no IPC is involved.
+
 ## Build locally
+
 
 ```bash
 npm ci

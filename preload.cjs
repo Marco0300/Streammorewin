@@ -13,6 +13,10 @@ contextBridge.exposeInMainWorld('streammoreDesktop', {
   version: process.versions.electron,
   platform: process.platform,
   nativePlayback: true,
+  // The page offers "Sign in with a code" when the app says it can present the
+  // pairing screen; a browser has no second screen to approve from, so it does
+  // not advertise this and keeps the password form alone.
+  deviceSignIn: true,
 
   /** Play a resolved source URL in the bundled VLC player. */
   playNative: (payload) => ipcRenderer.invoke('streammore:native-play', payload),
